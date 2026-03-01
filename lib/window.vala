@@ -1038,7 +1038,7 @@ namespace Xnp {
 		 * Updates the window title.
 		 */
 		private void update_title (string note_name) {
-			title = this.name + " - " + note_name;
+			title = note_name;
 		}
 
 		/**

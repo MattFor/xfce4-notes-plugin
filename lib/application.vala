@@ -131,6 +131,9 @@ namespace Xnp {
 				SList<string> groups = null;
 				var dir = Dir.open (notes_path, 0);
 				while ((name = dir.read_name ()) != null) {
+					if (name == "." || name == ".." || name == ".git")
+						continue;
+
 					groups.prepend (name);
 					found = true;
 				}

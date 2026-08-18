@@ -339,7 +339,9 @@ namespace Xnp {
 				try {
 					GLib.DirUtils.create_with_parents (window_path, 0700);
 					string note_path = "%s/%s".printf (window_path, _("Note %d").printf (1));
-					GLib.FileUtils.set_contents (note_path, "", -1);
+					GLib.FileUtils.set_contents_full (note_path, "", -1,
+						GLib.FileSetContentsFlags.CONSISTENT | GLib.FileSetContentsFlags.DURABLE,
+						0600);
 					this.load_window_data (window);
 				}
 				catch (FileError e) {
@@ -630,7 +632,9 @@ namespace Xnp {
 				}
 				string contents = keyfile.to_data (null);
 				if (contents != old_contents)
-					GLib.FileUtils.set_contents (config_file, contents);
+					GLib.FileUtils.set_contents_full (config_file, contents, -1,
+						GLib.FileSetContentsFlags.CONSISTENT | GLib.FileSetContentsFlags.DURABLE,
+						0600);
 			}
 			catch (FileError e) {
 				message ("Unable to save window configuration from %s: %s", config_file, e.message);
@@ -669,7 +673,9 @@ namespace Xnp {
 			try {
 				string contents = note.text;
 				if (contents != old_contents)
-					GLib.FileUtils.set_contents (path, contents, -1);
+					GLib.FileUtils.set_contents_full (path, contents, -1,
+						GLib.FileSetContentsFlags.CONSISTENT | GLib.FileSetContentsFlags.DURABLE,
+						0600);
 				note.dirty = false;
 				note.backed = true;
 			}
@@ -1009,7 +1015,6 @@ namespace Xnp {
 				"copyright", "Copyright © 2003-" + Config.COPYRIGHT_YEAR + " The Xfce development team",
 				"license", Xfce.get_license_text (Xfce.LicenseTextType.GPL),
 				"website", "https://docs.xfce.org/panel-plugins/xfce4-notes-plugin",
-				"website-label", "docs.xfce.org",
 				"authors", authors,
 				"translator-credits", _("translator-credits"),
 				null);

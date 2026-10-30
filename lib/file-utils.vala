@@ -21,21 +21,42 @@ namespace Xnp {
 
 	namespace FileUtils {
 
-		public bool validate_text_file (File file) {
-			bool result = false;
-
+		/* UTF-8 text, or legacy text converted from the locale's charset, then Windows-1252, then Latin-1 */
+		public bool read_text (File file, out string text) {
+			text = "";
+			uint8[] data;
 			try {
-				unowned char *valid_end;
-				uint8[] content = new uint8[4096];
-				unowned string str = (string) content;
-				var stream = file.read ();
-				var length = stream.read (content);
-				result = str.validate (length, out valid_end)
-					|| (valid_end - (char *)content > length - 6);
-			} catch (GLib.Error e) {
+				file.load_contents (null, out data, null);
+			}
+			catch (GLib.Error e) {
+				return false;
 			}
 
-			return result;
+			/* A NUL byte early on means binary */
+			for (int i = 0; i < int.min (data.length, 4096); i++) {
+				if (data[i] == 0)
+					return false;
+			}
+
+			unowned string raw = (string) data;
+			if (raw.validate (data.length)) {
+				text = raw.ndup (data.length);
+				return true;
+			}
+
+			string charset;
+			string[] charsets = { "WINDOWS-1252", "ISO-8859-1" };
+			if (!GLib.get_charset (out charset))
+				charsets = { charset, "WINDOWS-1252", "ISO-8859-1" };
+			foreach (var from in charsets) {
+				try {
+					text = GLib.convert (raw, data.length, "UTF-8", from);
+					return true;
+				}
+				catch (ConvertError e) {
+				}
+			}
+			return false;
 		}
 
 		public bool path_exists (string path) {

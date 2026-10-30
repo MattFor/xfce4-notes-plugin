@@ -6,6 +6,19 @@ The notes plugin provides you a quick way to write down a todo list,
 to paste a piece of code, to leave a note to your friend, or whatever
 else you had like to do with a Post-It note.
 
+### This fork
+
+- A notes folder that already has files in it is opened as it is, nothing is moved.
+- Every folder is a window named by its path (`Work/Ideas`); loose files at the top go in a window named after the
+  notes folder; hidden files and folders (`.git`, `.stfolder`) are skipped.
+- Notes in a legacy encoding (the locale's, Windows-1252, Latin-1) load, and are saved back as UTF-8 once edited.
+- Files that sync tools or other programs write while a note is being saved are no longer missed.
+- Scrolling over the title bar moves between notes; Shift+scroll shades, Alt+scroll sets the transparency.
+- A thicker frame to grab for resizing.
+- `xfce4-popup-notes` (show/hide all notes) is bound to Super+N on first start unless it already has a key; change it
+  in Settings → Keyboard → Application Shortcuts.
+- The window title shows only the note's name.
+
 ----
 
 ### Homepage

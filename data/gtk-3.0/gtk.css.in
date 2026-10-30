@@ -28,7 +28,7 @@
 
 /* window and frame */
 window#notes-window frame {
-	padding: 1px 2px 4px 2px;
+	padding: 5px 6px 6px 6px;
 	border: 1px solid shade (@notes_theme_base_color, 0.7);
 	background-image: linear-gradient(to bottom,
 	                                  shade (@notes_theme_base_color, 0.8),

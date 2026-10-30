@@ -26,12 +26,14 @@ namespace Xnp {
 		private uint src_external = 0;
 		private uint src_internal = 0;
 		private bool skip = false;
+		private bool missed = false;
 
 		public signal void note_updated (string note_name);
 		public signal void note_deleted (string note_name);
 		public signal void note_created (string note_name);
 		public signal void note_renamed (string note_name, string new_name);
 		public signal bool note_exists (File file);
+		public signal void rescan ();
 
 		struct FileEvent {
 			File file;
@@ -68,7 +70,10 @@ namespace Xnp {
 		}
 
 		private void monitor_change_cb (File file, File? other_file, FileMonitorEvent event) {
-			if (skip) return;
+			if (skip) {
+				missed = true;
+				return;
+			}
 
 			events += FileEvent(file, other_file, event);
 
@@ -122,6 +127,11 @@ namespace Xnp {
 			src_internal = Timeout.add (150, () => {
 				skip = false;
 				src_internal = 0;
+				/* Events dropped while skipping may include other programs' files */
+				if (missed) {
+					missed = false;
+					this.rescan ();
+				}
 				return Source.REMOVE;
 			});
 		}

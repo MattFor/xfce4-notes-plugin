@@ -83,6 +83,8 @@ namespace Xnp {
 		};
 
 		private int CORNER_MARGIN = 20;
+		private int RESIZE_MARGIN = 6;
+		private double scroll_delta = 0;
 		private Gdk.Cursor CURSOR_TOP_LC = new Gdk.Cursor.for_display (Gdk.Display.get_default(), Gdk.CursorType.TOP_LEFT_CORNER);
 		private Gdk.Cursor CURSOR_TOP = new Gdk.Cursor.for_display (Gdk.Display.get_default(), Gdk.CursorType.TOP_SIDE);
 		private Gdk.Cursor CURSOR_TOP_RC = new Gdk.Cursor.for_display (Gdk.Display.get_default(), Gdk.CursorType.TOP_RIGHT_CORNER);
@@ -491,9 +493,9 @@ namespace Xnp {
 
 			get_allocation (out allocation);
 
-			if (event.x > 4 && event.y > 4
-				&& event.x < allocation.width - 4
-				&& event.y < allocation.height - 4) {
+			if (event.x > RESIZE_MARGIN && event.y > RESIZE_MARGIN
+				&& event.x < allocation.width - RESIZE_MARGIN
+				&& event.y < allocation.height - RESIZE_MARGIN) {
 				get_window ().set_cursor (null);
 				return false;
 			}
@@ -612,27 +614,52 @@ namespace Xnp {
 			return false;
 		}
 
+		/* Smooth scrolling (most wheels and touchpads) reports deltas instead of a direction */
+		private Gdk.ScrollDirection? scroll_direction (Gdk.EventScroll event) {
+			if (event.direction != Gdk.ScrollDirection.SMOOTH)
+				return event.direction;
+			this.scroll_delta += event.delta_y != 0 ? event.delta_y : event.delta_x;
+			if (this.scroll_delta >= 1) {
+				this.scroll_delta = 0;
+				return Gdk.ScrollDirection.DOWN;
+			}
+			if (this.scroll_delta <= -1) {
+				this.scroll_delta = 0;
+				return Gdk.ScrollDirection.UP;
+			}
+			return null;
+		}
+
 		/**
 		 * title_evbox_scrolled_cb:
 		 *
-		 * Shade/unshade the window and set transparency by holding ALT.
+		 * Switch notes, shade/unshade the window by holding SHIFT and set transparency by holding ALT.
 		 */
 		private bool title_evbox_scrolled_cb (Gtk.Widget widget, Gdk.EventScroll event) {
+			var direction = scroll_direction (event);
+			if (direction == null)
+				return true;
 			if ((bool)(event.state & Gdk.ModifierType.MOD1_MASK)) {
-				if (event.direction == Gdk.ScrollDirection.UP) {
+				if (direction == Gdk.ScrollDirection.UP) {
 					opacity += 0.1;
-				} else if (event.direction == Gdk.ScrollDirection.DOWN) {
+				} else if (direction == Gdk.ScrollDirection.DOWN) {
 					if (opacity - 0.1 >= 0.1)
 						opacity -= 0.1;
 				}
 			}
-			else {
-				if (event.direction == Gdk.ScrollDirection.UP) {
+			else if ((bool)(event.state & Gdk.ModifierType.SHIFT_MASK)) {
+				if (direction == Gdk.ScrollDirection.UP) {
 					shade ();
 				}
-				else if (event.direction == Gdk.ScrollDirection.DOWN) {
+				else if (direction == Gdk.ScrollDirection.DOWN) {
 					unshade ();
 				}
+			}
+			else if (direction == Gdk.ScrollDirection.DOWN || direction == Gdk.ScrollDirection.RIGHT) {
+				notebook.next_page ();
+			}
+			else if (direction == Gdk.ScrollDirection.UP || direction == Gdk.ScrollDirection.LEFT) {
+				notebook.prev_page ();
 			}
 			return false;
 		}
@@ -660,7 +687,11 @@ namespace Xnp {
 			if ((event.state & Gtk.accelerator_get_default_mod_mask ()) != 0)
 				return false;
 
-			switch (event.direction) {
+			var direction = scroll_direction (event);
+			if (direction == null)
+				return true;
+
+			switch ((Gdk.ScrollDirection) direction) {
 				case Gdk.ScrollDirection.RIGHT:
 				case Gdk.ScrollDirection.DOWN:
 					notebook.next_page ();
@@ -1378,7 +1409,7 @@ namespace Xnp {
 		 * Verify if the file with given name exists in the notes directory.
 		 */
 		public bool note_file_exists (string file_name) {
-			var path = File.new_build_filename (app.notes_path, this.name, file_name).get_path ();
+			var path = File.new_build_filename (app.window_dir (this), file_name).get_path ();
 			return FileUtils.path_exists (path);
 		}
 

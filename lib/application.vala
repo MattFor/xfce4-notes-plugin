@@ -35,6 +35,7 @@ namespace Xnp {
 		private bool lock_focus_order = false;
 		private uint save_config_timeout = 0;
 		private string default_notes_path;
+		private Xnp.Window? root_window = null;
 		private Xnp.Theme theme;
 
 		private bool main_instance {
@@ -124,31 +125,8 @@ namespace Xnp {
 				update_notes_path ();
 			});
 
-			string name;
-			bool found = false;
-			try {
-				/* Load existing windows */
-				SList<string> groups = null;
-				var dir = Dir.open (notes_path, 0);
-				while ((name = dir.read_name ()) != null) {
-					if (name == "." || name == ".." || name == ".git")
-						continue;
-
-					groups.prepend (name);
-					found = true;
-				}
-				sort_groups_by_focus_order (ref groups);
-				foreach (var group_name in groups) {
-					create_window (group_name);
-				}
-			}
-			catch (GLib.Error e) {
-				GLib.DirUtils.create_with_parents (notes_path, 0700);
-			}
-			if (found == false) {
-				/* Create first-run window */
-				create_window ();
-			}
+			add_default_shortcut ();
+			load_windows ();
 
 			Gtk.Window.set_default_icon_name ("org.xfce.notes");
 		}
@@ -210,16 +188,15 @@ namespace Xnp {
 				return;
 			}
 
-			/* Check that the new path is empty */
-			try {
-				var dir = Dir.open (new_notes_path, 0);
-				if (dir.read_name () != null) {
-					notes_path_error (_("The selected directory (%s) already contains files. "
-							    + "You must select or create an empty directory.").printf (new_notes_path));
-					return;
-				}
-			}
-			catch (GLib.Error e) {
+			/* A folder that already holds notes is opened as it is */
+			if (has_visible_entries (new_notes_path)) {
+				save_notes ();
+				save_windows_configuration ();
+				foreach (var win in this.window_list.copy ())
+					destroy_window (win);
+				this.notes_path = new_notes_path;
+				load_windows ();
+				return;
 			}
 
 			/* Create/move to the new path */
@@ -231,6 +208,112 @@ namespace Xnp {
 			}
 
 			this.notes_path = new_notes_path;
+		}
+
+		/* Every folder holding notes is a window named by its path; loose files go in a window named after the notes folder */
+		private void load_windows () {
+			if (!GLib.FileUtils.test (this.notes_path, GLib.FileTest.IS_DIR))
+				GLib.DirUtils.create_with_parents (this.notes_path, 0700);
+
+			var groups = new SList<string> ();
+			bool loose = false;
+			collect_groups (this.notes_path, null, ref groups, ref loose);
+
+			string? root_name = null;
+			if (loose) {
+				root_name = Path.get_basename (this.notes_path);
+				while (groups.find_custom (root_name, strcmp) != null)
+					root_name = _("%s (top)").printf (root_name);
+				groups.prepend (root_name);
+			}
+
+			if (groups.length () == 0) {
+				create_window ();
+				return;
+			}
+			sort_groups_by_focus_order (ref groups);
+			foreach (var group_name in groups)
+				create_window (group_name, group_name == root_name);
+		}
+
+		private void collect_groups (string dir_path, string? prefix, ref SList<string> groups, ref bool loose) {
+			try {
+				var dir = Dir.open (dir_path, 0);
+				string? name;
+				while ((name = dir.read_name ()) != null) {
+					if (name.has_prefix ("."))
+						continue;
+					var path = Path.build_filename (dir_path, name);
+					var group = prefix == null ? name : Path.build_filename (prefix, name);
+					if (GLib.FileUtils.test (path, GLib.FileTest.IS_DIR)) {
+						if (prefix == null || has_note_files (path))
+							groups.prepend (group);
+						/* Symlinked folders are not followed, so a link loop cannot recurse forever */
+						if (!GLib.FileUtils.test (path, GLib.FileTest.IS_SYMLINK))
+							collect_groups (path, group, ref groups, ref loose);
+					}
+					else if (prefix == null && GLib.FileUtils.test (path, GLib.FileTest.IS_REGULAR)) {
+						loose = true;
+					}
+				}
+			}
+			catch (FileError e) {
+			}
+		}
+
+		private bool has_note_files (string dir_path) {
+			try {
+				var dir = Dir.open (dir_path, 0);
+				string? name;
+				while ((name = dir.read_name ()) != null) {
+					if (!name.has_prefix (".") && GLib.FileUtils.test (Path.build_filename (dir_path, name), GLib.FileTest.IS_REGULAR))
+						return true;
+				}
+			}
+			catch (FileError e) {
+			}
+			return false;
+		}
+
+		private bool has_visible_entries (string dir_path) {
+			try {
+				var dir = Dir.open (dir_path, 0);
+				string? name;
+				while ((name = dir.read_name ()) != null) {
+					if (!name.has_prefix ("."))
+						return true;
+				}
+			}
+			catch (FileError e) {
+			}
+			return false;
+		}
+
+		/* The root window holds the loose files of the notes folder itself */
+		public string window_dir (Xnp.Window window) {
+			return window == this.root_window ? this.notes_path : Path.build_filename (this.notes_path, window.name);
+		}
+
+		/* Binds Super+N to show/hide the notes once, unless xfce4-popup-notes already has a key */
+		private void add_default_shortcut () {
+			if (xfconf_channel.get_bool ("/global/shortcut-added", false))
+				return;
+			xfconf_channel.set_bool ("/global/shortcut-added", true);
+
+			var shortcuts = new Xfconf.Channel ("xfce4-keyboard-shortcuts");
+			var custom = shortcuts.get_properties ("/commands/custom");
+			bool bound = false;
+			bool taken = false;
+			if (custom != null) {
+				custom.foreach ((key, val) => {
+					if (val != null && val.holds (typeof (string)) && val.get_string () == "xfce4-popup-notes")
+						bound = true;
+					if (key.down () == "/commands/custom/<super>n")
+						taken = true;
+				});
+			}
+			if (!bound && !taken)
+				shortcuts.set_string ("/commands/custom/<Super>n", "xfce4-popup-notes");
 		}
 
 		private void notes_path_error (string message) {
@@ -297,8 +380,10 @@ namespace Xnp {
 		 * Creates a new Xnp.Window and stores it inside window_list.
 		 * If a name is given, it assumes it can load existing notes.
 		 */
-		public Xnp.Window? create_window (string? name = null) {
+		public Xnp.Window? create_window (string? name = null, bool root = false) {
 			var window = new Xnp.Window (this);
+			if (root)
+				this.root_window = window;
 
 			/* Default settings */
 			if (name == null) {
@@ -334,7 +419,7 @@ namespace Xnp {
 			this.focus_order.append (window);
 
 			/* Insert initial notes */
-			string window_path = "%s/%s".printf (notes_path, window.name);
+			string window_path = window_dir (window);
 			if (name == null || !GLib.FileUtils.test (window_path, GLib.FileTest.IS_DIR|GLib.FileTest.EXISTS)) {
 				try {
 					GLib.DirUtils.create_with_parents (window_path, 0700);
@@ -408,7 +493,7 @@ namespace Xnp {
 				try {
 					note.backed = false;
 					win.monitor.internal_change ();
-					var file = File.new_build_filename (notes_path, win.name, note.name);
+					var file = File.new_build_filename (window_dir (win), note.name);
 					file.create (FileCreateFlags.NONE);
 					note.backed = true;
 				}
@@ -418,7 +503,7 @@ namespace Xnp {
 			});
 			window.note_deleted.connect ((win, note) => {
 				try {
-					var file = File.new_build_filename (notes_path, win.name, note.name);
+					var file = File.new_build_filename (window_dir (win), note.name);
 					win.monitor.internal_change ();
 					file.delete ();
 					note.backed = false;
@@ -432,7 +517,7 @@ namespace Xnp {
 					return;
 				}
 				try {
-					var file = File.new_build_filename (notes_path, win.name, note.name);
+					var file = File.new_build_filename (window_dir (win), note.name);
 					win.monitor.internal_change ();
 					file.set_display_name (name);
 					note.name = name;
@@ -462,8 +547,8 @@ namespace Xnp {
 			/* Handle exchange of tabs between windows */
 			window.note_moved.connect ((to_win, from_win, note) => {
 				try {
-					var from_file = File.new_build_filename (notes_path, from_win.name, note.name);
-					var to_file = File.new_build_filename (notes_path, to_win.name, note.name);
+					var from_file = File.new_build_filename (window_dir (from_win), note.name);
+					var to_file = File.new_build_filename (window_dir (to_win), note.name);
 					from_win.monitor.internal_change ();
 					to_win.monitor.internal_change ();
 					from_file.move (to_file, FileCopyFlags.NONE);
@@ -489,11 +574,12 @@ namespace Xnp {
 		private void load_window_data (Xnp.Window window) {
 			/* Load notes */
 			string name;
-			string path = "%s/%s".printf (notes_path, window.name);
+			string path = window_dir (window);
 			try {
 				var dir = GLib.Dir.open (path, 0);
 				while ((name = dir.read_name ()) != null) {
-					load_note (window, name);
+					if (GLib.FileUtils.test (Path.build_filename (path, name), GLib.FileTest.IS_REGULAR))
+						load_note (window, name);
 				}
 			}
 			catch (FileError e) {
@@ -543,21 +629,44 @@ namespace Xnp {
 		 * Load existing note to the window.
 		 */
 		private void load_note (Xnp.Window window, string note_name) {
+			if (note_name.has_prefix ("."))
+				return;
+			string contents;
+			var file = File.new_build_filename (window_dir (window), note_name);
+			if (Xnp.FileUtils.read_text (file, out contents)) {
+				var note = window.insert_note (note_name);
+				note.text = contents;
+				Xfconf.property_bind (xfconf_channel, "/global/font-description",
+						      typeof (string), note.text_view, "font");
+				note.backed = true;
+			}
+		}
+
+		/* Picks up note files whose monitor events arrived while the window was saving */
+		private void rescan_window (Xnp.Window window) {
+			var path = window_dir (window);
 			try {
-				string contents;
-				var file = File.new_build_filename (notes_path, window.name, note_name);
-				if (Xnp.FileUtils.validate_text_file (file)) {
-					GLib.FileUtils.get_contents (file.get_path (), out contents, null);
-					var note = window.insert_note (note_name);
-					note.text = contents;
-					Xfconf.property_bind (xfconf_channel, "/global/font-description",
-							      typeof (string), note.text_view, "font");
-					note.backed = true;
+				var dir = Dir.open (path, 0);
+				string? name;
+				while ((name = dir.read_name ()) != null) {
+					if (window.note_name_exists (name) || is_save_temp (window, name)
+					    || !GLib.FileUtils.test (Path.build_filename (path, name), GLib.FileTest.IS_REGULAR))
+						continue;
+					external_event = true;
+					load_note (window, name);
+					external_event = false;
 				}
 			}
 			catch (FileError e) {
-				warning ("%s", e.message);
 			}
+		}
+
+		/* g_file_set_contents () writes "<note>.XXXXXX" next to the note before renaming it into place */
+		private bool is_save_temp (Xnp.Window window, string name) {
+			MatchInfo info;
+			if (!/^(.+)\.[A-Za-z0-9]{6}$/.match (name, 0, out info))
+				return false;
+			return window.note_name_exists (info.fetch (1));
 		}
 
 		/**
@@ -576,21 +685,15 @@ namespace Xnp {
 
 			note.backed = false;
 
-			try {
-				string contents;
-				var file = File.new_build_filename (notes_path, window.name, note_name);
-				if (Xnp.FileUtils.validate_text_file (file)) {
-					GLib.FileUtils.get_contents (file.get_path (), out contents, null);
-					var adjustment = note.adjustment;
-					var cursor = note.cursor;
-					note.text = contents;
-					note.cursor = cursor;
-					note.adjustment = adjustment;
-					note.backed = true;
-				}
-			}
-			catch (FileError e) {
-				warning ("%s", e.message);
+			string contents;
+			var file = File.new_build_filename (window_dir (window), note_name);
+			if (Xnp.FileUtils.read_text (file, out contents)) {
+				var adjustment = note.adjustment;
+				var cursor = note.cursor;
+				note.text = contents;
+				note.cursor = cursor;
+				note.adjustment = adjustment;
+				note.backed = true;
 			}
 
 			if (!note.backed)
@@ -663,7 +766,7 @@ namespace Xnp {
 		 * Save the contents of the given note.
 		 */
 		private void save_note (Xnp.Window window, Xnp.Note note) {
-			string path = "%s/%s/%s".printf (notes_path, window.name, note.name);
+			string path = Path.build_filename (window_dir (window), note.name);
 			string old_contents;
 			try {
 				GLib.FileUtils.get_contents (path, out old_contents);
@@ -690,6 +793,11 @@ namespace Xnp {
 		 * Rename the window.
 		 */
 		private void rename_window (Xnp.Window window) {
+			if (window == this.root_window) {
+				window.popup_error (_("This group is the notes folder itself, rename the folder instead"));
+				return;
+			}
+			var parent = Path.get_dirname (window.name);
 			var dialog = new Gtk.Dialog.with_buttons (_("Rename group"), window,
 					Gtk.DialogFlags.DESTROY_WITH_PARENT,
 					"gtk-cancel", Gtk.ResponseType.CANCEL, "gtk-ok", Gtk.ResponseType.OK);
@@ -700,7 +808,7 @@ namespace Xnp {
 			dialog.border_width = 4;
 
 			var entry = new Gtk.Entry ();
-			entry.text = window.name;
+			entry.text = Path.get_basename (window.name);
 			entry.activates_default = true;
 			content_area.add (entry);
 			content_area.show_all ();
@@ -708,18 +816,27 @@ namespace Xnp {
 			int res = dialog.run ();
 			window.dialog_hide (dialog);
 			if (res == Gtk.ResponseType.OK) {
-				weak string name = entry.text;
+				weak string base_name = entry.text;
+				string name = parent == "." ? base_name : Path.build_filename (parent, base_name);
 				if (window_name_exists (name)) {
 					window.popup_error (_("The name %s is already in use").printf (name));
 				}
 				else {
-					if (!name_is_valid (name)) {
+					if (!name_is_valid (base_name)) {
 						return;
 					}
 					try {
-						var group_dir = File.new_build_filename (notes_path, window.name);
-						group_dir.set_display_name (name);
+						var group_dir = File.new_for_path (window_dir (window));
+						group_dir.set_display_name (base_name);
+						var old_prefix = window.name + "/";
 						window.name = name;
+						/* Windows of subfolders move with their parent */
+						foreach (var win in this.window_list) {
+							if (win.name.has_prefix (old_prefix)) {
+								win.name = name + "/" + win.name.substring (old_prefix.length);
+								set_window_monitor (win);
+							}
+						}
 						this.window_list.sort ((GLib.CompareFunc)window.compare_func);
 
 						set_window_monitor (window);
@@ -749,7 +866,7 @@ namespace Xnp {
 			}
 
 			string name;
-			var path = File.new_build_filename (notes_path, window.name);
+			var path = File.new_for_path (window_dir (window));
 			if (path.query_exists ()) {
 				try {
 					window.monitor.internal_change ();
@@ -759,26 +876,36 @@ namespace Xnp {
 						/* From the user's point of view, it looks like the directory is empty.
 						   So we don't want to delete any files here, as this is not expected
 						   behavior. */
-						if (name == null) {
-							path.delete ();
-						} else {
+						if (name != null || window == this.root_window) {
 							return;
 						}
+						path.delete ();
+					} else if (window == this.root_window) {
+						/* The notes folder itself stays, only its loose notes go */
+						foreach (var note_name in window.get_note_names ())
+							path.get_child (note_name).delete ();
 					} else {
-						/* The user clearly wants to delete a group of notes */
+						/* The user clearly wants to delete a group of notes; subfolders are groups of their own */
+						bool has_subfolder = false;
 						if (name != null) {
 							do {
-								path.get_child (name).delete ();
+								var child = path.get_child (name);
+								if (GLib.FileUtils.test (child.get_path (), GLib.FileTest.IS_DIR))
+									has_subfolder = true;
+								else
+									child.delete ();
 							} while ((name = dir.read_name ()) != null);
 						}
-						path.delete ();
+						if (!has_subfolder)
+							path.delete ();
 					}
 				}
 				catch (GLib.Error e) {
 					window.popup_error (e.message);
 					name = window.name;
+					bool root = window == this.root_window;
 					destroy_window (window);
-					var win = create_window (name);
+					var win = create_window (name, root);
 					if (win != null)
 						win.show ();
 					return;
@@ -808,6 +935,8 @@ namespace Xnp {
 		 * Destroy window and forget it exists.
 		 */
 		private void destroy_window (Xnp.Window window) {
+			if (window == this.root_window)
+				this.root_window = null;
 			this.window_list.remove (window);
 			this.focus_order.remove (window);
 			window.destroy ();
@@ -832,7 +961,7 @@ namespace Xnp {
 		 * Creates an Xnp.WindowMonitor object and stores it inside window.
 		 */
 		private void set_window_monitor (Xnp.Window window) {
-			var path = File.new_build_filename (notes_path, window.name);
+			var path = File.new_for_path (window_dir (window));
 			window.monitor = new Xnp.WindowMonitor (path);
 
 			window.monitor.note_deleted.connect ((note_name) => {
@@ -840,7 +969,18 @@ namespace Xnp {
 			});
 
 			window.monitor.note_renamed.connect ((note_name, new_name) => {
-				window.rename_note (note_name, new_name);
+				if (window.note_name_exists (note_name)) {
+					window.rename_note (note_name, new_name);
+					return;
+				}
+				/* Sync tools write a temporary file and rename it into place */
+				external_event = true;
+				load_note (window, new_name);
+				external_event = false;
+			});
+
+			window.monitor.rescan.connect (() => {
+				rescan_window (window);
 			});
 
 			window.monitor.note_created.connect ((note_name) => {
